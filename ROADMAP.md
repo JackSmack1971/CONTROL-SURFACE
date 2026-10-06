@@ -111,6 +111,29 @@ Only the following bounded slices advance. An implementation phase must still re
 - **Rollback:** Revert the recovery transition and its tests together; stale state remains blocked and must be handled through a documented manual process until a replacement is designed. Never restore old verification as current.
 - **Why next:** The live-session report adds a concrete operational dead end to C01's already evidenced task-state integrity problem. It warrants priority over the earlier mechanical skill-integrity idea because it can strand an active task and obscure whether old verification remains trusted. This entry advances recovery diagnosis and policy definition; it does not authorize implementation or resolve C01's full transaction model.
 
+### R6 — Surface missing audit evidence during active task authority (C03, phase A split from R3)
+
+- **Problem:** `posttool_scope_audit.py` exits silently when the pre-command snapshot is absent (`snapshot_path.is_file()` false) or when the payload lacks a `tool_use_id`. During active task authority that silence is indistinguishable from a clean comparison, so a shell effect can go unaudited without any signal.
+- **Evidence:** **CURRENT, repository:** `.claude/hooks/posttool_scope_audit.py:36-45` returns exit 0 with no output for missing `tool_use_id` or missing snapshot; malformed snapshots already produce a block reason (lines 59-61). R2's shared classifier (`classify_git_state_changes`) is implemented, so R3's comparison dependency is met. R3's failure-event half still depends on R1; this missing-evidence half does not.
+- **Exact scope:** When task authority is active, report a missing snapshot or missing `tool_use_id` as explicitly incomplete audit evidence (diagnostic reason, not a silent pass). When no task authority is active, keep the current silent exit. Do not add the `PostToolUseFailure` binding here; that remains R3 after R1.
+- **Files likely affected:** `.claude/hooks/posttool_scope_audit.py`, `.claude/selftest/selftest.py`.
+- **Dependencies:** None for local logic. Claims that Claude Code delivers this path at runtime still require R1.
+- **Owner:** Hook/policy maintainer.
+- **Acceptance criteria:** Fixtures cover active + missing snapshot, active + missing `tool_use_id`, active + malformed snapshot, inactive + missing snapshot, and active + clean comparison; only the active-incomplete cases emit an incomplete-evidence reason; the clean and inactive cases stay silent.
+- **Verification strategy:** Direct hook invocation fixtures in temporary Git repositories; `python .claude/selftest/selftest.py` and `python .claude/selftest/metrics.py`; inspect final diff.
+- **Risk:** Low to medium: snapshot races or legitimately skipped pre-hooks could create noise; the fixture set must include the inactive case to avoid alerting outside governed tasks.
+- **Rollback:** Revert the hook branch and its fixtures together; prior silent behavior returns.
+- **Why next:** R2 and R5 have landed. R1 remains the top priority but needs a live canary operator in the exact binary; R6 is the highest-value slice that can be implemented and verified offline today, and it narrows R3 to its runtime-dependent remainder.
+
+## Progress (as of 2026-10-06)
+
+- **R2 — implemented** in `6210e71` (shared HEAD/index/worktree classifier used by `posttool_scope_audit.py`).
+- **R5 — implemented** in `8293767`, `a44bd6e`, `e256a64` (stale-authority recovery, bounded diagnostics, prompt before deactivation).
+- **R1 — open.** `.claude/state/runtime-validation.json` is absent; SessionStart reports runtime compatibility `missing`. Requires a live canary run, not offline work.
+- **R3 — open, narrowed.** Missing-evidence handling split into R6; the `PostToolUseFailure` binding remains blocked on R1.
+- **R4 — open.**
+- **Recommended order now:** R1 (when a canary operator is available) and R6 (offline) in parallel, then R3, then R4.
+
 ## Deferred ideas
 
 - **C08 — Lifecycle routing ownership:** defer pending a fixed blind routing evaluation and an exact map of genuinely contradictory duplicate statements. Preserve the distinct purposes of kernel routing, multi-stage workflow, and bounded implementation.
