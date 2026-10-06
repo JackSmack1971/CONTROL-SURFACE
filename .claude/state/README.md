@@ -13,7 +13,7 @@ Create both atomically after reconnaissance:
 python .claude/bin/statectl.py init --task "fix retry backoff" --expected "src/retry/**" --expected "tests/retry/**" --protected "src/generated/**"
 ```
 
-Do not hand-edit `ownership-baseline.json`. Direct writes are denied. Scope changes should use `statectl.py update-scope`; widening expected paths, removing protection, assigning user-owned dirty paths, or deactivation is an explicit approval transition. If repository root/worktree, branch, or baseline HEAD diverges, active state is stale: perform fresh reconnaissance and reinitialize rather than silently refreshing it.
+Do not hand-edit `ownership-baseline.json`. Direct writes are denied. Scope changes should use `statectl.py update-scope`; widening expected paths, removing protection, assigning user-owned dirty paths, or deactivation is an explicit approval transition. If repository root/worktree, branch, or baseline HEAD diverges, active state is stale: `statectl.py status` reports diagnostics without changing authority. The shell guard then permits only standalone bounded Git inspection commands and status. After fresh reconnaissance, invoke `statectl.py recover --task ... --expected ... --protected ...`; the pre-tool guard asks for approval. Recovery creates a new task and Git baseline, records the transition, and invalidates old check and verification evidence. It never refreshes the old task authority.
 
 ## Structured continuation/evidence files
 

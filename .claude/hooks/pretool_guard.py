@@ -69,6 +69,33 @@ def is_statectl(command: str) -> bool:
     return bool(re.search(r"(?:^|\s)(?:python\d?|py)\s+[^\n]*\.claude[/\\]bin[/\\]statectl\.py\b", command, re.IGNORECASE))
 
 
+def stale_diagnostic_command(command: str) -> bool:
+    """Allow only standalone status or a small Git inspection set while binding is stale."""
+    value = command.strip()
+    if re.fullmatch(r"(?:python\d?|py)\s+\.claude[/\\]bin[/\\]statectl\.py\s+status", value, re.IGNORECASE):
+        return True
+    patterns = (
+        r"git\s+status(?:\s+--short)?",
+        r"git\s+diff(?:\s+--(?:stat|name-only|check))?",
+        r"git\s+log(?:\s+-\d+)?(?:\s+--oneline)?",
+        r"git\s+show(?:\s+--stat)?(?:\s+[0-9a-f]{7,40})?",
+        r"git\s+rev-parse\s+--(?:show-toplevel|show-prefix|abbrev-ref\s+HEAD|verify\s+HEAD)",
+        r"git\s+branch(?:\s+--show-current)?",
+    )
+    return any(re.fullmatch(pattern, value, re.IGNORECASE) for pattern in patterns)
+
+
+def stale_binding(root: Path) -> bool:
+    surface = read_surface(root)
+    if surface is None:
+        return False
+    try:
+        validate_binding(root, surface, read_baseline(root), deadline_after())
+        return False
+    except ValueError:
+        return True
+
+
 def guard_authority_files(command: str) -> None:
     if not re.search(r"\.claude[/\\]state[/\\](?:change-surface|ownership-baseline)\.json\b", command, re.IGNORECASE):
         return
@@ -128,6 +155,16 @@ def main() -> None:
             if regex.search(command):
                 block(reason)
         surface = read_surface(root)
+        if surface is not None and stale_binding(root):
+            recovery = re.fullmatch(
+                r"(?:python\d?|py)\s+\.claude[/\\]bin[/\\]statectl\.py\s+recover\b[^\n;&|<>`]*",
+                command.strip(), re.IGNORECASE,
+            )
+            if recovery:
+                ask("stale task authority recovery replaces the active task identity, captures a new Git baseline, and invalidates prior verification; confirm fresh reconnaissance and this exact task/scope")
+            if stale_diagnostic_command(command):
+                raise SystemExit(0)
+            block("active task authority is stale; only statectl status and the bounded standalone Git read-only inspection commands are available until approved recovery")
         snapshot_shell_scope(root, tool_use_id if isinstance(tool_use_id, str) else None, surface, deadline)
         for regex, reason in ASK_COMPILED:
             if regex.search(command):

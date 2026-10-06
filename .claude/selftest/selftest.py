@@ -236,6 +236,37 @@ with tempfile.TemporaryDirectory(prefix="cp-authority-") as td:
     stale = run_hook(surface_guard, {"tool_name": "Edit", "tool_input": {"file_path": "src/allowed.txt"}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
     check(stale.returncode == 2 and "stale" in stale.stderr.lower(), "HEAD divergence invalidates active task authority", stale.stderr)
 
+    status = run_statectl(repo, "status")
+    try:
+        status_data = json.loads(status.stdout)
+    except Exception:
+        status_data = {}
+    check(status.returncode == 0 and status_data.get("status") == "stale" and status_data.get("current", {}).get("head"),
+          "statectl status diagnoses stale authority without rebinding", status.stdout + status.stderr)
+    for command in ("git status --short", "git log -1 --oneline", "git rev-parse --verify HEAD"):
+        diagnostic = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+        check(diagnostic.returncode == 0, f"stale authority permits bounded read-only diagnosis: {command}", diagnostic.stderr)
+    blocked = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": "git status --short; git checkout -- src/allowed.txt"}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    check(blocked.returncode == 2, "stale authority rejects chained diagnostic/mutation commands", blocked.stderr)
+    recovery_args = "python .claude/bin/statectl.py recover --task renewed --expected src/**"
+    approval = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": recovery_args}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    try:
+        decision = json.loads(approval.stdout)["hookSpecificOutput"]["permissionDecision"]
+    except Exception:
+        decision = None
+    check(approval.returncode == 0 and decision == "ask", "stale authority recovery requires explicit hook approval", approval.stdout + approval.stderr)
+    recovered = run_statectl(repo, "recover", "--task", "renewed", "--expected", "src/**")
+    check(recovered.returncode == 0, "fresh recovery creates a new task baseline", recovered.stderr)
+    new_baseline = json.loads((repo / ".claude/state/ownership-baseline.json").read_text())
+    new_surface = json.loads((repo / ".claude/state/change-surface.json").read_text())
+    verification = json.loads((repo / ".claude/state/verification.json").read_text())
+    check(new_baseline["baseline_id"] != baseline["baseline_id"] and new_surface["task"] == "renewed",
+          "recovery binds a new task identity and baseline", recovered.stdout)
+    check(verification.get("verdict") == "INVALIDATED" and verification.get("prior_baseline_id") == baseline["baseline_id"],
+          "recovery invalidates prior verification evidence", json.dumps(verification))
+    denied_current = run_statectl(repo, "recover", "--task", "again")
+    check(denied_current.returncode != 0, "recovery refuses to replace current authority", denied_current.stderr)
+
 print("\n== bounded shell snapshot and post-action audit ==")
 post_audit = CLAUDE / "hooks" / "posttool_scope_audit.py"
 with tempfile.TemporaryDirectory(prefix="cp-shell-") as td:
