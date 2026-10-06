@@ -246,6 +246,12 @@ with tempfile.TemporaryDirectory(prefix="cp-authority-") as td:
     for command in ("git status --short", "git log -1 --oneline", "git rev-parse --verify HEAD"):
         diagnostic = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
         check(diagnostic.returncode == 0, f"stale authority permits bounded read-only diagnosis: {command}", diagnostic.stderr)
+    diagnostic_chain = f'cd "{repo}" && git status --short && git diff --stat && git log --oneline -3 && wc -l READ-ONLY-RECON.md SYNTHESIS-BARRIER.md'
+    diagnostic = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": diagnostic_chain}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    check(diagnostic.returncode == 0, "stale authority permits the bounded read-only diagnostic chain", diagnostic.stderr)
+    unsafe_chain = "git status --short && python -c pass"
+    diagnostic = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": unsafe_chain}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    check(diagnostic.returncode == 2, "stale authority rejects a diagnostic chain with an unlisted command", diagnostic.stderr)
     blocked = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": "git status --short; git checkout -- src/allowed.txt"}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
     check(blocked.returncode == 2, "stale authority rejects chained diagnostic/mutation commands", blocked.stderr)
     recovery_args = "python .claude/bin/statectl.py recover --task renewed --expected src/**"

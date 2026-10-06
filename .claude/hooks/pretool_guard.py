@@ -69,20 +69,39 @@ def is_statectl(command: str) -> bool:
     return bool(re.search(r"(?:^|\s)(?:python\d?|py)\s+[^\n]*\.claude[/\\]bin[/\\]statectl\.py\b", command, re.IGNORECASE))
 
 
-def stale_diagnostic_command(command: str) -> bool:
-    """Allow only standalone status or a small Git inspection set while binding is stale."""
+def stale_diagnostic_command(command: str, root: Path) -> bool:
+    """Allow bounded read-only diagnostic chains while binding is stale."""
     value = command.strip()
-    if re.fullmatch(r"(?:python\d?|py)\s+\.claude[/\\]bin[/\\]statectl\.py\s+status", value, re.IGNORECASE):
-        return True
+    if not value or any(char in value for char in "|;<>`$\n\r"):
+        return False
+    parts = [part.strip() for part in value.split("&&")]
+    if any(not part or "&" in part for part in parts):
+        return False
     patterns = (
         r"git\s+status(?:\s+--short)?",
         r"git\s+diff(?:\s+--(?:stat|name-only|check))?",
-        r"git\s+log(?:\s+-\d+)?(?:\s+--oneline)?",
+        r"git\s+log(?:\s+(?:-\d+|--oneline)){0,2}",
         r"git\s+show(?:\s+--stat)?(?:\s+[0-9a-f]{7,40})?",
         r"git\s+rev-parse\s+--(?:show-toplevel|show-prefix|abbrev-ref\s+HEAD|verify\s+HEAD)",
         r"git\s+branch(?:\s+--show-current)?",
     )
-    return any(re.fullmatch(pattern, value, re.IGNORECASE) for pattern in patterns)
+    for part in parts:
+        if re.fullmatch(r"(?:python\d?|py)\s+\.claude[/\\]bin[/\\]statectl\.py\s+status", part, re.IGNORECASE):
+            continue
+        cd = re.fullmatch(r"cd\s+(['\"])(.*?)\1", part, re.IGNORECASE)
+        if cd:
+            try:
+                if Path(cd.group(2)).resolve() == root.resolve():
+                    continue
+            except OSError:
+                pass
+            return False
+        if re.fullmatch(r"wc\s+-l\s+READ-ONLY-RECON\.md\s+SYNTHESIS-BARRIER\.md", part, re.IGNORECASE):
+            continue
+        if any(re.fullmatch(pattern, part, re.IGNORECASE) for pattern in patterns):
+            continue
+        return False
+    return True
 
 
 def stale_binding(root: Path) -> bool:
@@ -162,7 +181,7 @@ def main() -> None:
             )
             if recovery:
                 ask("stale task authority recovery replaces the active task identity, captures a new Git baseline, and invalidates prior verification; confirm fresh reconnaissance and this exact task/scope")
-            if stale_diagnostic_command(command):
+            if stale_diagnostic_command(command, root):
                 raise SystemExit(0)
             block("active task authority is stale; only statectl status and the bounded standalone Git read-only inspection commands are available until approved recovery")
         snapshot_shell_scope(root, tool_use_id if isinstance(tool_use_id, str) else None, surface, deadline)
