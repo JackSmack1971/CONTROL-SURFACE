@@ -12,7 +12,7 @@ This inventory names the package mechanisms that can affect behavior. It is desc
 | Shell pre-guard | `.claude/hooks/pretool_guard.py` | Normalization gaps, direct secret probes, consequential effects, bounded pre-command Git snapshot | Fails closed on malformed input, stale task authority, or snapshot failure |
 | File-scope guard | `.claude/hooks/change_surface_guard.py` | Expected/protected scope and pre-task ownership enforcement | Fails closed on invalid/stale active state |
 | Shell post-audit | `.claude/hooks/posttool_scope_audit.py` | Detects shell-created scope/ownership drift after execution | Reports block; never claims rollback/prevention |
-| Startup health | `.claude/hooks/startup_health.py` | Checks required files, Git, active-state binding, records effective containment posture | Fails startup hook when unhealthy |
+| Startup health | `.claude/hooks/startup_health.py` | Checks required files, Git, active-state binding, records effective containment posture for startup, resume, clear, compact, and fork | Fails hook when unhealthy |
 | Resume context | `.claude/hooks/session_context.py` | Reinjects bounded structured task facts as data | Omits missing/invalid optional state |
 | Stop gate | `.claude/hooks/completion_gate.py` | Requires current scope conformance and state-bound fresh verification | Exits nonzero while active task evidence is stale/missing |
 | Task state utility | `.claude/bin/statectl.py` | Atomically creates Git-derived ownership baseline, updates governed scope, seals verification | Scope/ownership-changing commands are subject to explicit approval |
