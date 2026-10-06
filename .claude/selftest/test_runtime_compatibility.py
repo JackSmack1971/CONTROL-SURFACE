@@ -26,6 +26,15 @@ class CompatibilityTests(unittest.TestCase):
                 evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
             save()
             self.assertEqual(compatibility(root, "v1")["status"], "verified")
+            evidence["surfaces"].pop("shell_permission_forms")
+            save()
+            self.assertEqual(compatibility(root, "v1")["status"], "invalid")
+            evidence["surfaces"]["shell_permission_forms"] = "skip"
+            save()
+            self.assertEqual(compatibility(root, "v1")["status"], "invalid")
+            evidence["surfaces"]["shell_permission_forms"] = "pass"
+            save()
+            self.assertEqual(compatibility(root, "v1")["status"], "verified")
             self.assertEqual(compatibility(root, "v2")["status"], "stale")
             self.assertEqual(compatibility(root, None)["status"], "stale")
             instruction.write_text("edited", encoding="utf-8")

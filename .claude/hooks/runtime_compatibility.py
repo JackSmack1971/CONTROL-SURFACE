@@ -9,7 +9,8 @@ import platform
 import re
 
 SURFACES = ("permissions", "PreToolUse", "PostToolUse", "SessionStart", "Stop",
-            "instruction_symlink_denied", "codex_claude_boundary")
+            "instruction_symlink_denied", "codex_claude_boundary",
+            "shell_permission_forms")
 
 
 def binding(root: Path, version: str | None) -> dict:

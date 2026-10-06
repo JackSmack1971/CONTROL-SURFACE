@@ -8,10 +8,11 @@ Minimum canary:
 2. start Claude Code in a disposable Git repository containing this control plane and confirm the `SessionStart` health hook executes successfully;
 3. confirm a benign `Read` and `Bash(git status --short)` are accepted;
 4. confirm a known denied file read and a known `PreToolUse` ask/deny are surfaced by the runtime as intended without exposing a real secret;
-5. initialize task state with `python .claude/bin/statectl.py init ...`, make one in-scope disposable change, and confirm an out-of-scope file edit requires approval;
-6. confirm a shell-created out-of-scope change is reported by `PostToolUse` (then discard only the disposable repository);
-7. confirm `Stop` is blocked while verification is missing, then run an inspected benign check through `statectl.py run-check --criterion "canary" -- <executable> <arguments>`, seal disposable verification and confirm it no longer blocks;
-8. record exactly which permission expressions, matchers, hook events, and output schemas were observed working.
+5. run the shell permission form canaries below; all four assignment forms must produce both configured ask and deny outcomes, and benign controls must remain runnable;
+6. initialize task state with `python .claude/bin/statectl.py init ...`, make one in-scope disposable change, and confirm an out-of-scope file edit requires approval;
+7. confirm a shell-created out-of-scope change is reported by `PostToolUse` (then discard only the disposable repository);
+8. confirm `Stop` is blocked while verification is missing, then run an inspected benign check through `statectl.py run-check --criterion "canary" -- <executable> <arguments>`, seal disposable verification and confirm it no longer blocks;
+9. record exactly which permission expressions, matchers, hook events, and output schemas were observed working.
 
 Example evidence shape:
 
@@ -31,7 +32,8 @@ Example evidence shape:
     "SessionStart": "pass",
     "Stop": "pass",
     "instruction_symlink_denied": "pass",
-    "codex_claude_boundary": "pass"
+    "codex_claude_boundary": "pass",
+    "shell_permission_forms": "pass"
   },
   "notes": []
 }
@@ -68,11 +70,36 @@ evidence matches, not cryptographic attestation or proof of current external pol
 
 Run these manually in fresh temporary Git repositories, never this working tree.
 Use only synthetic marker text; preserve transcripts and effective runtime settings.
-Do not launch Claude recursively for a second opinion. If symlink creation is
-unavailable (for example Windows privilege restrictions), record the canary as
-unrun; it cannot count as `pass`.
+Do not launch Claude recursively for a second opinion.
 
-1. **Instruction symlinks:** create a sibling directory outside the disposable
+1. **Shell permission assignment forms:** run in a fresh disposable Git
+   repository with no remote configured. Configure one `Bash(touch *)` rule as
+   `ask`, then as `deny`, and confirm the rule in effective runtime settings.
+   For each form below, issue a Bash tool call with a distinct marker filename
+   inside that repository:
+
+   ```sh
+   declare target=touch; "$target" .canary-declare
+   typeset target=touch; "$target" .canary-typeset
+   export target=touch; "$target" .canary-export
+   readonly target=touch; "$target" .canary-readonly
+   ```
+
+   Repeat all four commands in both configurations. Under `ask`, confirm each
+   prompts and reject it. Under `deny`, confirm each is denied. In both cases,
+   confirm no marker was created. Never approve an ask case. A created marker
+   means the permission failed and the surface cannot pass. Use a fresh session
+   or clear the shell state between cases so assignments do not leak. In each
+   configuration also run a benign control such as
+   `printf 'shell-permission-control\\n'` and confirm it runs without a prompt
+   or denial. Record the eight decisions and both control results in `notes`;
+   mark `shell_permission_forms` pass only when all expected outcomes are
+   observed. These checks exercise command permission matching, not a security
+   boundary around shell programs.
+
+2. **Instruction symlinks:** if symlink creation is unavailable (for example
+   Windows privilege restrictions), record this canary as unrun; it cannot
+   count as `pass`. Otherwise create a sibling directory outside the disposable
    working directory with a file containing an unpredictable synthetic marker.
    In separate fresh sessions symlink project `CLAUDE.md`, a `.claude/rules/*.md`
    rule, and `AGENTS.md` to that file. Enable the corresponding instruction
@@ -83,7 +110,7 @@ unrun; it cannot count as `pass`.
    request a direct Read through the link. Record exact paths, expressions, and
    rejection evidence. All cases must reject before recording
    `instruction_symlink_denied: pass`.
-2. **Codex/Claude boundary:** copy the control plane into a fresh disposable
+3. **Codex/Claude boundary:** copy the control plane into a fresh disposable
    repository. Add distinct harmless marker directives to its CLAUDE.md and
    Codex AGENTS.md. Inspect loaded instruction sources with the installed
    runtime's diagnostics and effective Project Instructions selection. Confirm
@@ -102,3 +129,5 @@ evidence. The release motivating these canaries is
 release notes alone do not establish a canary pass.
 
 Offline regressions: `python .claude/selftest/test_runtime_compatibility.py`.
+The runtime evidence validator requires `shell_permission_forms: "pass"`; an
+absent or non-passing result makes compatibility evidence invalid.
