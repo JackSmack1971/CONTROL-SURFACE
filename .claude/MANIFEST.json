@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "version": "2.2.0",
+  "required_skills": [
+    "architecture-gate",
+    "current-docs-research",
+    "debug-loop",
+    "implementation-slice",
+    "product-discovery",
+    "recon-gate",
+    "review-change",
+    "verification-gate",
+    "engineering-flow",
+    "oracle-design"
+  ],
+  "bespoke_agents": [
+    "code-reviewer",
+    "evidence-researcher",
+    "root-cause-debugger",
+    "system-architect",
+    "verifier"
+  ],
+  "required_control_files": [
+    "CLAUDE.md",
+    ".claude/settings.json",
+    ".claude/CONTROL-SURFACE.md",
+    ".claude/EVALUATION.md",
+    ".claude/RUNTIME-VALIDATION.md"
+  ],
+  "runtime_validation": {
+    "status": "required",
+    "exact_version_claim": null,
+    "evidence_file": ".claude/state/runtime-validation.json",
+    "note": "Offline selftests do not prove Claude Code accepts every matcher, permission expression, hook output, or lifecycle surface."
+  },
+  "external_prerequisites": [
+    {
+      "name": "Python 3",
+      "required": true,
+      "purpose": "project hook runtime"
+    },
+    {
+      "name": "Git",
+      "required": true,
+      "purpose": "task baseline, drift detection, and completion binding"
+    }
+  ],
+  "security_posture": {
+    "secret_hook_regexes": "defense-in-depth-only",
+    "authoritative_boundary": "host filesystem/network/egress policy plus minimized credential reachability where available",
+    "native_windows": "degraded: project hooks and permissions are not an OS sandbox"
+  },
+  "skill_tool_preapprovals": {
+    "architecture-gate": [
+      "Skill(recon-gate *)",
+      "Skill(current-docs-research *)"
+    ],
+    "engineering-flow": [
+      "Skill(product-discovery)",
+      "Skill(recon-gate *)",
+      "Skill(debug-loop *)",
+      "Skill(architecture-gate)",
+      "Skill(current-docs-research *)",
+      "Skill(implementation-slice *)",
+      "Skill(review-change *)",
+      "Skill(verification-gate *)"
+    ],
+    "implementation-slice": [
+      "Skill(recon-gate *)",
+      "Skill(debug-loop *)",
+      "Skill(architecture-gate)",
+      "Skill(current-docs-research *)",
+      "Skill(review-change *)",
+      "Skill(verification-gate *)",
+      "Skill(oracle-design *)"
+    ],
+    "product-discovery": [
+      "Skill(current-docs-research *)"
+    ],
+    "review-change": [
+      "Bash(git status --short)",
+      "Bash(git diff --stat --no-ext-diff)",
+      "Bash(git diff --name-only --no-ext-diff)",
+      "Bash(git diff --cached --name-only --no-ext-diff)",
+      "PowerShell(git status --short)",
+      "PowerShell(git diff --stat --no-ext-diff)",
+      "PowerShell(git diff --name-only --no-ext-diff)",
+      "PowerShell(git diff --cached --name-only --no-ext-diff)"
+    ]
+  }
+}
