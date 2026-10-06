@@ -190,6 +190,142 @@ def capture_git_state(root: Path, deadline: float, *, full_content: bool = False
     return payload
 
 
+def _changed_commit_paths(root: Path, before_head: str, after_head: str, deadline: float) -> list[str]:
+    if before_head == after_head:
+        return []
+    raw = run_git(
+        root,
+        ["diff", "--name-status", "--find-renames", "-z", before_head, after_head, "--"],
+        deadline,
+    ).stdout
+    records = raw.split(b"\0")
+    paths: set[str] = set()
+    index = 0
+    while index < len(records):
+        status = records[index]
+        index += 1
+        if not status:
+            continue
+        status_text = status.decode("ascii", errors="replace")
+        count = 2 if status_text.startswith(("R", "C")) else 1
+        for record in records[index:index + count]:
+            if record:
+                paths.add(record.decode("utf-8", errors="surrogateescape").replace("\\", "/"))
+        index += count
+    return sorted(paths)
+
+
+def classify_git_state_changes(before: dict[str, Any], after: dict[str, Any], root: Path, deadline: float) -> dict[str, list[str]]:
+    """Classify captured HEAD, index, and worktree deltas by affected path."""
+    before_entries = before.get("entries", {})
+    after_entries = after.get("entries", {})
+    if not isinstance(before_entries, dict) or not isinstance(after_entries, dict):
+        raise ValueError("captured worktree entries are invalid")
+
+    before_index = before.get("index", [])
+    after_index = after.get("index", [])
+    if not isinstance(before_index, list) or not isinstance(after_index, list):
+        raise ValueError("captured index entries are invalid")
+
+    def by_path(entries: list[dict[str, Any]]) -> dict[str, tuple[tuple[str, str, str], ...]]:
+        grouped: dict[str, list[tuple[str, str, str]]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                raise ValueError("captured index entry is invalid")
+            values = tuple(str(entry.get(field, "")) for field in ("mode", "blob", "stage"))
+            grouped.setdefault(entry["path"], []).append(values)
+        return {path: tuple(sorted(values)) for path, values in grouped.items()}
+
+    old_index, new_index = by_path(before_index), by_path(after_index)
+    index_paths = sorted(path for path in set(old_index) | set(new_index)
+                         if old_index.get(path) != new_index.get(path))
+    before_head, after_head = before.get("head"), after.get("head")
+    if not isinstance(before_head, str) or not isinstance(after_head, str):
+        raise ValueError("captured HEAD is invalid")
+    head_paths = _changed_commit_paths(root, before_head, after_head, deadline)
+
+    # Dirty paths already have a pre-command filesystem signature. For paths
+    # that were clean, compare the post-command worktree directly with the old
+    # HEAD so staging alone is not mislabeled as a worktree change.
+    old_dirty = set(before_entries)
+    candidates = set(old_dirty) | set(after_entries) | set(index_paths) | set(head_paths)
+    worktree_paths: set[str] = set()
+    current_budget = [MAX_SAMPLE_BYTES]
+    for path in sorted(old_dirty):
+        current_signature = bounded_file_signature(root / path, current_budget)
+        if before_entries[path].get("signature") != current_signature:
+            worktree_paths.add(path)
+
+    clean_before_candidates = candidates - old_dirty
+    old_index_paths = set(old_index)
+    filemode = False
+    if clean_before_candidates:
+        filemode_result = subprocess.run(
+            ["git", "-C", str(root), "config", "--bool", "core.filemode"],
+            capture_output=True, text=True, check=False, timeout=remaining(deadline),
+        )
+        if filemode_result.returncode not in (0, 1):
+            raise RuntimeError((filemode_result.stderr or "could not read core.filemode").strip())
+        filemode = (filemode_result.stdout.strip().lower() == "true" if filemode_result.returncode == 0
+                    else os.name != "nt")
+
+    for path in sorted(clean_before_candidates):
+        prior_entries = old_index.get(path, ())
+        prior = next((entry for entry in prior_entries if entry[2] == "0"), None)
+        target = root / path
+        if prior is None:
+            worktree_paths.add(path)
+            continue
+        if prior[0] == "120000":
+            if not target.is_symlink():
+                worktree_paths.add(path)
+                continue
+            link_target = os.readlink(target).encode("utf-8", errors="surrogateescape")
+            current_blob = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "--stdin"],
+                input=link_target, capture_output=True, text=False, check=False,
+                timeout=remaining(deadline),
+            )
+            if current_blob.returncode != 0:
+                raise RuntimeError(current_blob.stderr.decode("utf-8", errors="replace").strip())
+            current_blob_id = current_blob.stdout.decode("ascii", errors="replace").strip()
+        elif prior[0] == "160000":
+            if not target.is_dir():
+                worktree_paths.add(path)
+                continue
+            current_commit = subprocess.run(
+                ["git", "-C", str(target), "rev-parse", "--verify", "HEAD"],
+                capture_output=True, text=True, check=False, timeout=remaining(deadline),
+            )
+            if current_commit.returncode != 0:
+                raise RuntimeError((current_commit.stderr or "submodule HEAD unavailable").strip())
+            current_blob_id = current_commit.stdout.strip()
+        elif target.is_file() and not target.is_symlink():
+            current_blob_id = run_git(
+                root, ["hash-object", "--path=" + path, str(target)], deadline, text=True
+            ).stdout.strip()
+        else:
+            worktree_paths.add(path)
+            continue
+        if current_blob_id != prior[1]:
+            worktree_paths.add(path)
+            continue
+        if filemode and prior[0] in {"100644", "100755"}:
+            current_executable = bool(target.stat().st_mode & 0o111)
+            indexed_executable = prior[0] == "100755"
+            if current_executable != indexed_executable:
+                worktree_paths.add(path)
+
+    for path in set(after_entries) - old_dirty - old_index_paths:
+        # A newly visible untracked/staged-add path had no prior tracked entry.
+        worktree_paths.add(path)
+    return {
+        "HEAD": head_paths,
+        "index": index_paths,
+        "worktree": sorted(worktree_paths),
+    }
+
+
 def state_dir(root: Path) -> Path:
     return root / ".claude" / "state"
 

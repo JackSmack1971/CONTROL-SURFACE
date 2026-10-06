@@ -23,6 +23,12 @@ def block(reason: str) -> None:
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
+        # Claude Code sets this after a Stop hook has already made the model
+        # continue. Repeating the same gate failure cannot resolve persistent
+        # state (for example, pre-existing dirty work), so report it once and
+        # allow the continued turn to end instead of creating a Stop loop.
+        if payload.get("stop_hook_active") is True:
+            raise SystemExit(0)
         root = find_project_root(payload.get("cwd") or os.getcwd())
     except Exception as exc:
         block(f"Stop hook input could not be parsed ({type(exc).__name__})")

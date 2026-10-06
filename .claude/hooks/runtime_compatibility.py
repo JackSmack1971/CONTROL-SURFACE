@@ -1,7 +1,7 @@
 """Content-bound diagnostic evidence; this is not authorization or attestation."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ import re
 SURFACES = ("permissions", "PreToolUse", "PostToolUse", "SessionStart", "Stop",
             "instruction_symlink_denied", "codex_claude_boundary",
             "shell_permission_forms")
+MAX_EVIDENCE_AGE = timedelta(days=90)
 
 
 def binding(root: Path, version: str | None) -> dict:
@@ -61,6 +62,10 @@ def compatibility(root: Path, version: str | None) -> dict:
         timestamp = datetime.fromisoformat(evidence["validated_at"].replace("Z", "+00:00"))
         if timestamp.utcoffset() is None:
             raise ValueError("validated_at must include timezone")
+        timestamp = timestamp.astimezone(timezone.utc)
+        now = datetime.now(timezone.utc)
+        if timestamp > now:
+            raise ValueError("validated_at is in the future")
         if any(evidence["surfaces"].get(surface) != "pass" for surface in SURFACES):
             raise ValueError("required live surfaces have not all passed")
         current = binding(root, version)
@@ -74,5 +79,7 @@ def compatibility(root: Path, version: str | None) -> dict:
                      if hashes.get(k) != current["files_sha256"].get(k))
     if changed:
         reasons.append("control files changed: " + ", ".join(changed))
+    if now - timestamp > MAX_EVIDENCE_AGE:
+        reasons.append("runtime evidence is older than 90 days")
     return {"status": "stale" if reasons else "verified", "reasons": reasons,
             "validated_at": evidence["validated_at"]}

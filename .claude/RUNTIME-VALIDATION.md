@@ -61,10 +61,13 @@ settings and instruction selection in notes and rerun tests when it changes.
 
 Startup reports `runtime_compatibility` separately from structural health:
 `missing` for absent evidence, `invalid` for malformed/legacy/incomplete or
-non-passing evidence, `stale` for version/platform/inventory mismatch (including
-an unavailable CLI version), and `verified` for matching recorded passes.
-These are diagnostics and do not block normal work. `verified` means recorded
-evidence matches, not cryptographic attestation or proof of current external policy.
+non-passing evidence (including a future `validated_at`), `stale` for evidence
+more than 90 days old or for version/platform/inventory mismatch (including an
+unavailable CLI version), and `verified` for fresh, matching recorded passes.
+Age is measured from timezone-aware `validated_at` against the local UTC clock;
+exactly 90 days old is still fresh. These are diagnostics and do not block
+normal work. `verified` means recorded evidence matches, not cryptographic
+attestation or proof of current external policy.
 
 ## Disposable live canaries
 

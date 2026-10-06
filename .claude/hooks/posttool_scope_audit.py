@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sys
 
-from control_common import capture_git_state, deadline_after, find_project_root
+from control_common import capture_git_state, classify_git_state_changes, deadline_after, find_project_root
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -55,14 +55,13 @@ def main() -> None:
         after = capture_git_state(root, deadline)
         if after is None:
             raise ValueError("Git worktree unavailable after command")
+        dimensions = classify_git_state_changes(before, after, root, deadline)
     except Exception as exc:
         emit_block([f"scope audit could not compare bounded Git state ({type(exc).__name__}: {exc})"])
         raise SystemExit(0)
 
-    before_entries = before.get("entries", {}) if isinstance(before.get("entries", {}), dict) else {}
-    after_entries = after.get("entries", {}) if isinstance(after.get("entries", {}), dict) else {}
-    changed = sorted(path for path in set(before_entries) | set(after_entries) if before_entries.get(path) != after_entries.get(path))
-    if not changed:
+    changed = sorted({path for paths in dimensions.values() for path in paths})
+    if not changed and before.get("head") == after.get("head"):
         raise SystemExit(0)
 
     expected = surface.get("expected", [])
@@ -71,21 +70,25 @@ def main() -> None:
     authorized_dirty = surface.get("authorized_dirty", [])
     reasons: list[str] = []
     for rel in changed:
+        changed_dimensions = [name for name, paths in dimensions.items() if rel in paths]
+        label = "/".join(changed_dimensions)
         if rel.startswith(".claude/state/.hook-snapshots/"):
             continue
         if rel in {".claude/state/change-surface.json", ".claude/state/ownership-baseline.json"}:
-            reasons.append(f"{rel} changed from the shell outside statectl governance")
+            reasons.append(f"{label} delta: {rel} changed from the shell outside statectl governance")
             continue
         if rel == ".claude/state" or rel.startswith(".claude/state/"):
             continue
         if matches(rel, protected):
-            reasons.append(f"{rel} is protected")
+            reasons.append(f"{label} delta: {rel} is protected")
         elif matches(rel, preexisting_dirty) and not matches(rel, authorized_dirty):
-            reasons.append(f"{rel} was pre-task dirty/user-owned and was not assigned to this task")
+            reasons.append(f"{label} delta: {rel} was pre-task dirty/user-owned and was not assigned to this task")
         elif not expected:
-            reasons.append(f"{rel} changed while the active surface had no expected paths")
+            reasons.append(f"{label} delta: {rel} changed while the active surface had no expected paths")
         elif not matches(rel, expected):
-            reasons.append(f"{rel} is outside the expected surface")
+            reasons.append(f"{label} delta: {rel} is outside the expected surface")
+    if before.get("head") != after.get("head") and not dimensions["HEAD"]:
+        reasons.append("HEAD changed without a commit path delta; scope cannot be classified")
     if reasons:
         emit_block(reasons)
     raise SystemExit(0)

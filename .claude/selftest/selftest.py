@@ -241,7 +241,7 @@ post_audit = CLAUDE / "hooks" / "posttool_scope_audit.py"
 with tempfile.TemporaryDirectory(prefix="cp-shell-") as td:
     repo = Path(td)
     init_repo(repo)
-    init = run_statectl(repo, "init", "--task", "shell selftest", "--expected", "src/**")
+    init = run_statectl(repo, "init", "--task", "shell selftest", "--expected", "src/**", "--protected", "docs/**")
     check(init.returncode == 0, "shell test task state initializes", init.stderr)
 
     def pair(tool_id: str, mutate) -> subprocess.CompletedProcess[str]:
@@ -263,6 +263,36 @@ with tempfile.TemporaryDirectory(prefix="cp-shell-") as td:
     check(outside_decision == "block", "shell mutation outside expected surface is reported post-action", outside_post.stdout)
     subprocess.run(["git", "checkout", "--", "docs/outside.txt"], cwd=repo, check=True)
 
+    outside_file = repo / "docs/outside.txt"
+    outside_file.write_text("staged baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/outside.txt"], cwd=repo, check=True)
+    outside_file.write_text("worktree baseline\n", encoding="utf-8")
+    outside_stat = outside_file.stat()
+
+    def stage_protected_only() -> None:
+        outside_file.write_text("staged outside\n", encoding="utf-8")
+        subprocess.run(["git", "add", "docs/outside.txt"], cwd=repo, check=True)
+        outside_file.write_text("worktree baseline\n", encoding="utf-8")
+        os.utime(outside_file, ns=(outside_stat.st_atime_ns, outside_stat.st_mtime_ns))
+
+    index_outside = pair("index-outside", stage_protected_only)
+    try:
+        index_decision = json.loads(index_outside.stdout).get("decision")
+    except Exception:
+        index_decision = None
+    check(index_decision == "block" and "index delta" in index_outside.stdout and "worktree" not in index_outside.stdout and "protected" in index_outside.stdout,
+          "index-only protected delta is reported with its dimension and scope", index_outside.stdout)
+    subprocess.run(["git", "reset", "-q", "--", "docs/outside.txt"], cwd=repo, check=True)
+
+    index_expected = pair("index-expected", lambda: (
+        (repo / "src/allowed.txt").write_text("staged expected\n", encoding="utf-8"),
+        subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True),
+        (repo / "src/allowed.txt").write_text("base\n", encoding="utf-8"),
+    ))
+    check(index_expected.returncode == 0 and index_expected.stdout == "",
+          "index-only delta inside expected scope is accepted", index_expected.stdout)
+    subprocess.run(["git", "reset", "-q", "--", "src/allowed.txt"], cwd=repo, check=True)
+
     # Large dirty files are sampled, not hashed in full.
     large = repo / "src/large.bin"
     large.write_bytes(b"x" * (12 * 1024 * 1024))
@@ -270,6 +300,108 @@ with tempfile.TemporaryDirectory(prefix="cp-shell-") as td:
     probe = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": "git status --short"}, "cwd": str(repo), "tool_use_id": "large-file"}, cwd=repo, project_dir=repo)
     elapsed = time.monotonic() - started
     check(probe.returncode == 0 and elapsed < 8.0, "bounded snapshot handles a large dirty file below outer hook timeout", f"elapsed={elapsed:.2f}s stderr={probe.stderr!r}")
+
+print("\n== Git state dimension classifier matrix ==")
+sys.path.insert(0, str(CLAUDE / "hooks"))
+from control_common import capture_git_state, classify_git_state_changes, deadline_after
+with tempfile.TemporaryDirectory(prefix="cp-dimensions-") as td:
+    repo = Path(td)
+    init_repo(repo)
+    allowed = repo / "src/allowed.txt"
+    other = repo / "src/other.txt"
+    other.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/other.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "add second expected path"], cwd=repo, check=True)
+
+    def snapshot() -> dict:
+        state = capture_git_state(repo, deadline_after())
+        assert state is not None
+        return state
+
+    before = snapshot()
+    allowed.write_text("worktree only\n", encoding="utf-8")
+    worktree_only = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(worktree_only == {"HEAD": [], "index": [], "worktree": ["src/allowed.txt"]},
+          "worktree-only modification is isolated")
+    allowed.write_text("base\n", encoding="utf-8")
+
+    before = snapshot()
+    allowed.write_text("index staged\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    allowed.write_text("base\n", encoding="utf-8")
+    clean_before_index_only = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(clean_before_index_only == {"HEAD": [], "index": ["src/allowed.txt"], "worktree": []},
+          "clean-before staged change restored to original content remains index-only", repr(clean_before_index_only))
+    subprocess.run(["git", "reset", "-q", "--", "src/allowed.txt"], cwd=repo, check=True)
+
+    allowed.write_text("index baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    allowed.write_text("worktree baseline\n", encoding="utf-8")
+    worktree_stat = allowed.stat()
+    before = snapshot()
+    allowed.write_text("index only\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    allowed.write_text("worktree baseline\n", encoding="utf-8")
+    os.utime(allowed, ns=(worktree_stat.st_atime_ns, worktree_stat.st_mtime_ns))
+    after = snapshot()
+    index_only = classify_git_state_changes(before, after, repo, deadline_after())
+    check(before["entries"] == after["entries"]
+          and index_only == {"HEAD": [], "index": ["src/allowed.txt"], "worktree": []},
+          "index-only blob change is isolated when captured worktree entries are equal")
+    subprocess.run(["git", "reset", "-q", "--", "src/allowed.txt"], cwd=repo, check=True)
+
+    before = snapshot()
+    subprocess.run(["git", "update-index", "--chmod=+x", "src/allowed.txt"], cwd=repo, check=True)
+    mode_only = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(mode_only == {"HEAD": [], "index": ["src/allowed.txt"], "worktree": []},
+          "index-only mode change is classified")
+    subprocess.run(["git", "update-index", "--chmod=-x", "src/allowed.txt"], cwd=repo, check=True)
+
+    allowed.write_text("head only\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    before = snapshot()
+    subprocess.run(["git", "commit", "-qm", "commit already staged file"], cwd=repo, check=True)
+    head_only = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(head_only == {"HEAD": ["src/allowed.txt"], "index": [], "worktree": []},
+          "HEAD-only commit is isolated from unchanged index and worktree")
+
+    before = snapshot()
+    subprocess.run(["git", "mv", "src/allowed.txt", "src/renamed.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "rename expected file"], cwd=repo, check=True)
+    renamed = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(renamed["HEAD"] == ["src/allowed.txt", "src/renamed.txt"]
+          and renamed["index"] == ["src/allowed.txt", "src/renamed.txt"]
+          and renamed["worktree"] == ["src/allowed.txt", "src/renamed.txt"],
+          "rename reports both paths across changed dimensions", repr(renamed))
+
+    before = snapshot()
+    (repo / "src/renamed.txt").write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/renamed.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "commit expected file"], cwd=repo, check=True)
+    other.write_text("worktree after commit\n", encoding="utf-8")
+    combined = classify_git_state_changes(before, snapshot(), repo, deadline_after())
+    check(combined["HEAD"] == ["src/renamed.txt"] and combined["index"] == ["src/renamed.txt"]
+          and combined["worktree"] == ["src/other.txt", "src/renamed.txt"],
+          "combined commit and worktree changes retain per-dimension paths", repr(combined))
+
+with tempfile.TemporaryDirectory(prefix="cp-head-audit-") as td:
+    repo = Path(td)
+    init_repo(repo)
+    initialized = run_statectl(repo, "init", "--task", "HEAD scope audit", "--expected", "src/**", "--protected", "docs/**")
+    check(initialized.returncode == 0, "HEAD scope audit fixture initializes", initialized.stderr)
+    (repo / "docs/outside.txt").write_text("committed outside\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/outside.txt"], cwd=repo, check=True)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git commit"}, "cwd": str(repo), "tool_use_id": "head-outside"}
+    pre = run_hook(guard, payload, cwd=repo, project_dir=repo)
+    subprocess.run(["git", "commit", "-qm", "commit protected path"], cwd=repo, check=True)
+    post = run_hook(post_audit, {**payload, "hook_event_name": "PostToolUse"}, cwd=repo, project_dir=repo)
+    try:
+        head_decision = json.loads(post.stdout).get("decision")
+    except Exception:
+        head_decision = None
+    check(pre.returncode == 0 and head_decision == "block" and "HEAD delta" in post.stdout
+          and "protected" in post.stdout,
+          "HEAD-only protected commit delta is reported with dimension and scope", post.stdout)
 
 print("\n== structured resume state ==")
 session_context = CLAUDE / "hooks" / "session_context.py"
