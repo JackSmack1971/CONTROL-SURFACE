@@ -20,6 +20,12 @@ Prefer current first-party documentation, official changelogs, standards, and pr
 
 Return only facts that can change the engineering decision, compatibility/deprecation constraints, and unresolved uncertainty. Do not modify the repository.
 
+## Source coverage
+
+Before declaring a claim verified, check retrieved sources for truncation or omitted-text notices. With WebFetch, continue using `offset` when omitted content may contain the relevant section or a decision-changing compatibility caveat; inspect each continuation for further omissions. Use the installed tool's specification rather than guessing offset units or values. Stop when the claim and its relevant constraints are covered, not merely when a supporting excerpt is found; reading every unrelated section is unnecessary.
+
+If continuation is unavailable, fails, or exhausts the research budget, seek an accessible primary source covering the gap. Absence of a truncation notice alone does not prove full coverage. Return `PARTIAL` when unread or inaccessible content could change the decision; use `BLOCKED` when no usable decision-relevant evidence can be established. Reserve `VERIFIED` for claims whose decision-relevant coverage and constraints are established.
+
 ## Handoff
 
 End with:
@@ -27,5 +33,6 @@ End with:
 - `status`: `VERIFIED`, `PARTIAL`, or `BLOCKED`
 - `decision_facts`: the minimal current facts the parent should rely on
 - `compatibility`: version, deprecation, or migration constraints
+- `source_coverage`: for each relied-on source, URL and sections/locators read, truncation notices and continuation offsets used (if any), and remaining unread/inaccessible sections with their possible decision impact; distinguish relevant-section coverage from a full-source read
 - `uncertainty`: anything not established by primary evidence
 - `next`: the parent skill that should consume this result

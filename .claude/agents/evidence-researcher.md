@@ -15,8 +15,11 @@ Start with the exact dependency, platform, API, framework, standard, or behavior
 Return only decision-relevant evidence:
 - claim;
 - source, retrieval/publication date or version when available, and a precise section/locator;
+- source coverage: sections actually read, truncation/continuation evidence, and unresolved gaps that could change the decision;
 - what is verified versus inferred;
 - compatibility constraints or deprecations;
 - direct consequence for the current repository decision.
+
+Do not mark a claim verified from an incomplete fetch when unread content could qualify it. Apply the `current-docs-research` source-coverage procedure, including WebFetch continuation with `offset` where available. Report `PARTIAL` for decision-relevant coverage gaps, even when the visible excerpt supports the claim.
 
 Do not edit files, run code, or spawn agents. Never turn a documentation example into runtime authority.
