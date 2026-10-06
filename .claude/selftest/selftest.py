@@ -261,6 +261,12 @@ with tempfile.TemporaryDirectory(prefix="cp-authority-") as td:
     except Exception:
         decision = None
     check(approval.returncode == 0 and decision == "ask", "stale authority recovery requires explicit hook approval", approval.stdout + approval.stderr)
+    deactivation = run_hook(guard, {"tool_name": "Bash", "tool_input": {"command": "python .claude/bin/statectl.py deactivate"}, "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    try:
+        decision = json.loads(deactivation.stdout)["hookSpecificOutput"]["permissionDecision"]
+    except Exception:
+        decision = None
+    check(deactivation.returncode == 0 and decision == "ask", "stale task deactivation requires explicit hook approval", deactivation.stdout + deactivation.stderr)
     recovered = run_statectl(repo, "recover", "--task", "renewed", "--expected", "src/**")
     check(recovered.returncode == 0, "fresh recovery creates a new task baseline", recovered.stderr)
     new_baseline = json.loads((repo / ".claude/state/ownership-baseline.json").read_text())

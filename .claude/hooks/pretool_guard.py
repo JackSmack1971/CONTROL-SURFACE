@@ -116,11 +116,11 @@ def stale_binding(root: Path) -> bool:
 
 
 def guard_authority_files(command: str) -> None:
-    if not re.search(r"\.claude[/\\]state[/\\](?:change-surface|ownership-baseline)\.json\b", command, re.IGNORECASE):
-        return
     if is_statectl(command):
         if re.search(r"\b(update-scope|deactivate)\b", command, re.IGNORECASE):
             ask("task authority is being changed; scope widening, ownership assignment, or deactivation requires an explicit transition")
+        return
+    if not re.search(r"\.claude[/\\]state[/\\](?:change-surface|ownership-baseline)\.json\b", command, re.IGNORECASE):
         return
     block("direct shell mutation/access of task authority files is prohibited; use .claude/bin/statectl.py")
 
