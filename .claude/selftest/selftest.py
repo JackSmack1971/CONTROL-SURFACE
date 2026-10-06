@@ -336,6 +336,79 @@ with tempfile.TemporaryDirectory(prefix="cp-stop-") as td:
     stale = run_hook(completion, {"hook_event_name": "Stop", "cwd": str(repo)}, cwd=repo, project_dir=repo)
     check(stale.returncode == 2 and "changed after verification" in stale.stderr.lower(), "Stop gate blocks stale verification after later edit", stale.stderr)
 
+print("\n== verification fingerprint regressions ==")
+sys.path.insert(0, str(CLAUDE / "hooks"))
+from control_common import capture_git_state, deadline_after, FINGERPRINT_VERSION
+with tempfile.TemporaryDirectory(prefix="cp-fingerprint-") as td:
+    repo = Path(td)
+    init_repo(repo)
+    run_statectl(repo, "init", "--task", "fingerprint selftest", "--expected", "src/**")
+    target = repo / "src/allowed.txt"
+    target.write_bytes(b"x" * (256 * 1024))
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    target.write_bytes(b"y" * (256 * 1024))
+
+    def snapshot(full=False):
+        return capture_git_state(repo, deadline_after(), full_content=full)
+
+    def fresh_seal():
+        result = run_statectl(repo, "run-check", "--criterion", "fingerprint", "--", PYTHON, "-c", "pass")
+        check(result.returncode == 0, "fingerprint regression check executes", result.stderr)
+        result = run_statectl(repo, "seal-verification", "--summary", "fingerprint regression")
+        check(result.returncode == 0, "fingerprint regression seal succeeds", result.stderr)
+
+    def rejected(label):
+        result = run_statectl(repo, "seal-verification", "--summary", "stale")
+        check(result.returncode != 0, label + " invalidates check evidence")
+        result = run_hook(completion, {"hook_event_name": "Stop", "cwd": str(repo)}, cwd=repo, project_dir=repo)
+        check(result.returncode == 2, label + " invalidates completion seal", result.stderr)
+
+    fresh_seal()
+    before = snapshot(True)
+    # Change the staged blob while keeping worktree content and MM status fixed.
+    target.write_bytes(b"z" * (256 * 1024))
+    subprocess.run(["git", "add", "src/allowed.txt"], cwd=repo, check=True)
+    target.write_bytes(b"y" * (256 * 1024))
+    after = snapshot(True)
+    check(before["entries"] == after["entries"] and before["fingerprint"] != after["fingerprint"], "index blob changes alter fingerprint with identical worktree/status")
+    rejected("staged blob change")
+    fresh_seal()
+    before = snapshot(True)
+    subprocess.run(["git", "update-index", "--chmod=+x", "src/allowed.txt"], cwd=repo, check=True)
+    check(before["fingerprint"] != snapshot(True)["fingerprint"], "index mode change alters fingerprint")
+    rejected("staged mode change")
+    fresh_seal()
+    before = snapshot(True)
+    subprocess.run(["git", "update-index", "--force-remove", "src/user-owned.txt"], cwd=repo, check=True)
+    check(before["fingerprint"] != snapshot(True)["fingerprint"], "index path removal alters fingerprint")
+    rejected("staged path removal")
+    fresh_seal()
+    sampled_before = snapshot()
+    full_before = snapshot(True)
+    st = target.stat()
+    with target.open("r+b") as fh:
+        fh.seek(128 * 1024)
+        fh.write(b"q")
+    os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))
+    check(sampled_before["fingerprint"] == snapshot()["fingerprint"], "fast diagnostics retain bounded sampling")
+    check(full_before["fingerprint"] != snapshot(True)["fingerprint"], "full hashes detect unsampled same-size edit with restored mtime")
+    rejected("unsampled content change")
+    fresh_seal()
+    seal_path = repo / ".claude/state/verification.json"
+    seal = json.loads(seal_path.read_text())
+    check(seal.get("fingerprint_version") == FINGERPRINT_VERSION, "seals record fingerprint format version")
+    seal.pop("fingerprint_version")
+    seal_path.write_text(json.dumps(seal))
+    result = run_hook(completion, {"hook_event_name": "Stop", "cwd": str(repo)}, cwd=repo, project_dir=repo)
+    check(result.returncode == 2 and "fingerprint format" in result.stderr, "legacy seals require resealing")
+    evidence_path = repo / ".claude/state/check-evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    for record in evidence["checks"]:
+        record.pop("fingerprint_version")
+    evidence_path.write_text(json.dumps(evidence))
+    result = run_statectl(repo, "seal-verification", "--summary", "legacy")
+    check(result.returncode != 0, "legacy check evidence must be rerun before resealing")
+
 print("\n== agents, skills, rules, review retrieval ==")
 agent_files = sorted((CLAUDE / "agents").glob("*.md"))
 agent_names: list[str] = []

@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from runtime_compatibility import compatibility
 
 from control_common import deadline_after, find_project_root, read_baseline, read_surface, state_dir, validate_binding, write_json_atomic
 
@@ -76,6 +77,7 @@ def main() -> None:
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "claude_version_observed": claude_version,
+        "runtime_compatibility": compatibility(root, claude_version),
         "live_session_start_hook_observed": True,
         "active_task_state": active,
         "containment_posture": posture,
@@ -91,7 +93,8 @@ def main() -> None:
         raise SystemExit(2)
     sys.stdout.write(
         "Control-plane startup health: healthy. Containment posture: " + posture
-        + ". Live SessionStart hook executed; full Claude Code surface compatibility still requires the documented runtime canary.\n"
+        + ". Runtime compatibility: " + report["runtime_compatibility"]["status"]
+        + ". Live SessionStart hook executed; see RUNTIME-VALIDATION.md for evidence requirements.\n"
     )
 
 

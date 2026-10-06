@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from control_common import VERIFICATION_SCHEMA, deadline_after, find_project_root, read_baseline, read_json, read_surface, state_dir, validate_binding, validate_checks
+from control_common import FINGERPRINT_VERSION, VERIFICATION_SCHEMA, deadline_after, find_project_root, read_baseline, read_json, read_surface, state_dir, validate_binding, validate_checks
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -35,7 +35,7 @@ def main() -> None:
         raise SystemExit(0)
     try:
         baseline = read_baseline(root)
-        current = validate_binding(root, surface, baseline, deadline)
+        current = validate_binding(root, surface, baseline, deadline, full_content=True)
     except Exception as exc:
         block(f"active task authority is stale/unhealthy: {exc}")
 
@@ -64,6 +64,8 @@ def main() -> None:
         block(f"verification evidence is invalid: {exc}")
     if verification.get("schema_version") != VERIFICATION_SCHEMA or verification.get("verdict") != "VERIFIED":
         block("verification evidence does not record a VERIFIED verdict")
+    if verification.get("fingerprint_version") != FINGERPRINT_VERSION:
+        block("unsupported verification fingerprint format; rerun checks and reseal")
     if verification.get("baseline_id") != baseline["baseline_id"]:
         block("verification evidence belongs to a different ownership baseline")
     if verification.get("head") != current["head"] or verification.get("status_fingerprint") != current["fingerprint"]:

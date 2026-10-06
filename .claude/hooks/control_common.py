@@ -13,6 +13,7 @@ from typing import Any
 STATE_SCHEMA = 2
 BASELINE_SCHEMA = 1
 VERIFICATION_SCHEMA = 2
+FINGERPRINT_VERSION = 2
 MAX_DIRTY_PATHS = 256
 MAX_SAMPLE_BYTES = 8 * 1024 * 1024
 PER_FILE_SAMPLE = 128 * 1024
@@ -126,7 +127,28 @@ def bounded_file_signature(path: Path, remaining_budget: list[int]) -> dict[str,
     }
 
 
-def capture_git_state(root: Path, deadline: float) -> dict[str, Any] | None:
+def complete_file_signature(path: Path, deadline: float) -> dict[str, Any]:
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return {"kind": "missing"}
+    if path.is_symlink():
+        return {"kind": "symlink", "target": os.readlink(path)}
+    if not path.is_file():
+        raise ValueError(f"cannot fully hash non-file path: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            remaining(deadline)
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return {"kind": "file", "size": st.st_size, "mode": st.st_mode,
+            "sha256": digest.hexdigest()}
+
+
+def capture_git_state(root: Path, deadline: float, *, full_content: bool = False) -> dict[str, Any] | None:
     try:
         proc = run_git(root, ["status", "--porcelain=v1", "-z", "-b", "--untracked-files=all"], deadline)
     except RuntimeError:
@@ -142,9 +164,26 @@ def capture_git_state(root: Path, deadline: float) -> dict[str, Any] | None:
     for rel in sorted(paths):
         entries[rel] = {
             "status": paths[rel],
-            "signature": bounded_file_signature(root / rel, budget),
+            "signature": (complete_file_signature(root / rel, deadline) if full_content
+                          else bounded_file_signature(root / rel, budget)),
         }
-    payload = {"branch": branch, "head": head, "entries": entries}
+    # NUL-delimited records preserve paths (including tabs/newlines), modes,
+    # blob identities and conflict stages without Git's display quoting.
+    index = run_git(root, ["ls-files", "--stage", "-z"], deadline).stdout
+    index_entries = []
+    for record in index.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        rel = raw_path.decode("utf-8", errors="surrogateescape")
+        if rel == ".claude/state" or rel.startswith(".claude/state/"):
+            continue
+        mode, blob, stage = metadata.decode("ascii").split()
+        index_entries.append({"path": rel, "mode": mode, "blob": blob, "stage": stage})
+    payload = {"fingerprint_version": FINGERPRINT_VERSION,
+               "content_mode": "full" if full_content else "sampled",
+               "branch": branch, "head": head, "entries": entries,
+               "index": index_entries}
     payload["fingerprint"] = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8", errors="surrogatepass")
     ).hexdigest()
@@ -195,12 +234,12 @@ def read_baseline(root: Path) -> dict[str, Any]:
     return baseline
 
 
-def validate_binding(root: Path, surface: dict[str, Any], baseline: dict[str, Any], deadline: float) -> dict[str, Any]:
+def validate_binding(root: Path, surface: dict[str, Any], baseline: dict[str, Any], deadline: float, *, full_content: bool = False) -> dict[str, Any]:
     if surface["baseline_id"] != baseline["baseline_id"]:
         raise ValueError("change surface is not bound to the ownership baseline")
     if canonical_root(baseline["repository_root"]) != canonical_root(root):
         raise ValueError("ownership baseline belongs to a different repository/worktree root")
-    current = capture_git_state(root, deadline)
+    current = capture_git_state(root, deadline, full_content=full_content)
     if current is None:
         raise ValueError("active change surface requires a Git worktree")
     if current["head"] != baseline["baseline_head"]:
@@ -225,6 +264,8 @@ def validate_checks(checks: Any, baseline_id: str, current: dict[str, Any]) -> N
     for check in checks:
         if not isinstance(check, dict):
             raise ValueError("check must be a structured execution record")
+        if check.get("fingerprint_version") != FINGERPRINT_VERSION or current.get("content_mode") != "full":
+            raise ValueError("unsupported verification fingerprint format; rerun checks and reseal")
         argv = check.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x for x in argv):
             raise ValueError("check requires command arguments")

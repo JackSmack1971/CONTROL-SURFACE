@@ -16,6 +16,7 @@ HOOKS = Path(__file__).resolve().parents[1] / "hooks"
 sys.path.insert(0, str(HOOKS))
 from control_common import (  # noqa: E402
     BASELINE_SCHEMA,
+    FINGERPRINT_VERSION,
     STATE_SCHEMA,
     VERIFICATION_SCHEMA,
     capture_git_state,
@@ -122,7 +123,7 @@ def cmd_run_check(args: argparse.Namespace) -> None:
     if surface is None:
         raise SystemExit("statectl: no active change surface")
     baseline = read_baseline(repo)
-    before = validate_binding(repo, surface, baseline, deadline_after())
+    before = validate_binding(repo, surface, baseline, deadline_after(), full_content=True)
     argv = args.command
     if argv and argv[0] == "--":
         argv = argv[1:]
@@ -137,13 +138,13 @@ def cmd_run_check(args: argparse.Namespace) -> None:
         timed_out, exit_code = True, None
     except OSError as exc:
         raise SystemExit(f"statectl: check could not start: {exc}")
-    after = validate_binding(repo, surface, baseline, deadline_after())
+    after = validate_binding(repo, surface, baseline, deadline_after(), full_content=True)
     path = state_dir(repo) / "check-evidence.json"
     previous = read_json(path).get("checks", []) if path.is_file() else []
     # Keep only checks against this exact state, including failures until rerun.
-    previous = [c for c in previous if isinstance(c, dict) and c.get("baseline_id") == baseline["baseline_id"] and c.get("after_fingerprint") == before["fingerprint"]]
+    previous = [c for c in previous if isinstance(c, dict) and c.get("fingerprint_version") == FINGERPRINT_VERSION and c.get("baseline_id") == baseline["baseline_id"] and c.get("after_fingerprint") == before["fingerprint"]]
     previous = [c for c in previous if c.get("argv") != argv or c.get("criterion") != args.criterion]
-    record = {"argv": argv, "criterion": args.criterion, "exit_code": exit_code,
+    record = {"fingerprint_version": FINGERPRINT_VERSION, "argv": argv, "criterion": args.criterion, "exit_code": exit_code,
               "timed_out": timed_out, "started_at": started, "finished_at": now_iso(),
               "baseline_id": baseline["baseline_id"], "head": before["head"],
               "before_fingerprint": before["fingerprint"], "after_fingerprint": after["fingerprint"]}
@@ -162,13 +163,14 @@ def cmd_seal_verification(args: argparse.Namespace) -> None:
     if surface is None:
         raise SystemExit("statectl: no active change surface")
     baseline = read_baseline(repo)
-    current = validate_binding(repo, surface, baseline, deadline)
+    current = validate_binding(repo, surface, baseline, deadline, full_content=True)
     checks = read_json(state_dir(repo) / "check-evidence.json").get("checks")
     validate_checks(checks, baseline["baseline_id"], current)
     if not args.summary.strip():
         raise SystemExit("statectl: verification summary must be non-empty")
     verification = {
         "schema_version": VERIFICATION_SCHEMA,
+        "fingerprint_version": FINGERPRINT_VERSION,
         "verdict": "VERIFIED",
         "baseline_id": baseline["baseline_id"],
         "head": current["head"],
